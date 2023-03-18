@@ -36,6 +36,7 @@ use crate::{
     chuid::ChuId,
     config::Config,
     error::{Error, Result},
+    hsmauth::HsmAuth,
     mgm::MgmKey,
     piv,
     reader::{Context, Reader},
@@ -45,6 +46,7 @@ use log::{error, info};
 use pcsc::Card;
 use rand_core::{OsRng, RngCore};
 use std::{
+    cmp::{Ord, Ordering},
     fmt::{self, Display},
     str::FromStr,
 };
@@ -142,6 +144,39 @@ impl Version {
             minor: bytes[1],
             patch: bytes[2],
         }
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.major > other.major {
+            return Ordering::Greater;
+        }
+        if self.major < other.major {
+            return Ordering::Less;
+        }
+
+        if self.minor > other.minor {
+            return Ordering::Greater;
+        }
+        if self.minor < other.minor {
+            return Ordering::Less;
+        }
+
+        if self.patch > other.patch {
+            return Ordering::Greater;
+        }
+        if self.patch < other.patch {
+            return Ordering::Less;
+        }
+
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -275,7 +310,7 @@ impl YubiKey {
             .map(|p| Buffer::new(p.expose_secret().clone()));
 
         let txn = Transaction::new(&mut self.card)?;
-        txn.select_application()?;
+        txn.select_piv_application()?;
 
         if let Some(p) = &pin {
             txn.verify_pin(p)?;
@@ -462,7 +497,7 @@ impl YubiKey {
         // Force a re-select to unverify, because once verified the spec dictates that
         // subsequent verify calls will return a "verification not needed" instead of
         // the number of tries left...
-        txn.select_application()?;
+        txn.select_piv_application()?;
 
         // WRONG_PIN is expected on successful query.
         match txn.verify_pin(&[]) {
@@ -694,6 +729,11 @@ impl YubiKey {
 
         Ok(())
     }
+
+    /// Creates a client for the YubiHSM AUth
+    pub fn hsmauth(self) -> Result<HsmAuth> {
+        HsmAuth::new(self)
+    }
 }
 
 impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
@@ -708,7 +748,7 @@ impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
 
         let mut app_version_serial = || -> Result<(Version, Serial)> {
             let txn = Transaction::new(&mut card)?;
-            txn.select_application()?;
+            txn.select_piv_application()?;
 
             let v = txn.get_version()?;
             let s = txn.get_serial(v)?;
