@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Metadata command returns `Error:NotFound` instead of `Error::GenericError` when the object doesn't exist.
+- Metadata command returns `Error:NotFound` instead of `Error::GenericError` when the object doesn't exist ([#558]).
 
 ## 0.8.0 (2023-08-15)
 ### Added
