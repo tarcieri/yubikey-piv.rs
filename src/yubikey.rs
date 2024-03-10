@@ -45,6 +45,7 @@ use log::{error, info};
 use pcsc::Card;
 use rand_core::{OsRng, RngCore};
 use std::{
+    cmp::{Ord, Ordering},
     fmt::{self, Display},
     str::FromStr,
 };
@@ -143,11 +144,60 @@ impl Version {
             patch: bytes[2],
         }
     }
+
+    #[cfg(feature = "untested")]
+    pub(crate) fn parse(input: &[u8]) -> Result<Self> {
+        use nom::{combinator::eof, number::complete::u8};
+
+        let (i, major) = u8(input).map_err(|_: nom::Err<()>| Error::ParseError)?;
+        let (i, minor) = u8(i).map_err(|_: nom::Err<()>| Error::ParseError)?;
+        let (i, patch) = u8(i).map_err(|_: nom::Err<()>| Error::ParseError)?;
+        let (_i, _) = eof(i).map_err(|_: nom::Err<()>| Error::ParseError)?;
+
+        Ok(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
 }
 
 impl Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.major > other.major {
+            return Ordering::Greater;
+        }
+        if self.major < other.major {
+            return Ordering::Less;
+        }
+
+        if self.minor > other.minor {
+            return Ordering::Greater;
+        }
+        if self.minor < other.minor {
+            return Ordering::Less;
+        }
+
+        if self.patch > other.patch {
+            return Ordering::Greater;
+        }
+        if self.patch < other.patch {
+            return Ordering::Less;
+        }
+
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -275,7 +325,7 @@ impl YubiKey {
             .map(|p| Buffer::new(p.expose_secret().clone()));
 
         let txn = Transaction::new(&mut self.card)?;
-        txn.select_application()?;
+        txn.select_piv_application()?;
 
         if let Some(p) = &pin {
             txn.verify_pin(p)?;
@@ -462,7 +512,7 @@ impl YubiKey {
         // Force a re-select to unverify, because once verified the spec dictates that
         // subsequent verify calls will return a "verification not needed" instead of
         // the number of tries left...
-        txn.select_application()?;
+        txn.select_piv_application()?;
 
         // WRONG_PIN is expected on successful query.
         match txn.verify_pin(&[]) {
@@ -708,7 +758,7 @@ impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
 
         let mut app_version_serial = || -> Result<(Version, Serial)> {
             let txn = Transaction::new(&mut card)?;
-            txn.select_application()?;
+            txn.select_piv_application()?;
 
             let v = txn.get_version()?;
             let s = txn.get_serial(v)?;
