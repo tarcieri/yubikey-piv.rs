@@ -928,17 +928,16 @@ pub fn metadata(yubikey: &mut YubiKey, slot: SlotId) -> Result<SlotMetadata> {
 
     let response = txn.transfer_data(&templ, &[], CB_OBJ_MAX)?;
 
-    if !response.is_success() {
-        if response.status_words() == StatusWords::NotSupportedError {
-            return Err(Error::NotSupported); // Requires firmware 5.2.3
-        } else {
-            return Err(Error::GenericError);
+    match response.status_words() {
+        StatusWords::Success => {
+            let buf = Buffer::new(response.data().into());
+            SlotMetadata::try_from(buf)
         }
+        StatusWords::ReferenceDataNotFoundError => Err(Error::NotFound),
+        // Requires firmware 5.2.3
+        StatusWords::NotSupportedError => Err(Error::NotSupported),
+        _ => Err(Error::GenericError),
     }
-
-    let buf = Buffer::new(response.data().into());
-
-    SlotMetadata::try_from(buf)
 }
 
 /// Metadata from a slot

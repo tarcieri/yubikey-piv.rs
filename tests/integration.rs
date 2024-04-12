@@ -315,6 +315,52 @@ fn test_read_metadata() {
 
 #[test]
 #[ignore]
+fn test_read_metadata_missing_key() {
+    let mut yubikey = YUBIKEY.lock().unwrap();
+
+    assert!(yubikey.verify_pin(b"123456").is_ok());
+    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+
+    // we assume that at least one of these slots is empty
+    let slots_to_check = [
+        RetiredSlotId::R10,
+        RetiredSlotId::R11,
+        RetiredSlotId::R12,
+        RetiredSlotId::R13,
+        RetiredSlotId::R14,
+        RetiredSlotId::R15,
+        RetiredSlotId::R16,
+        RetiredSlotId::R17,
+        RetiredSlotId::R18,
+        RetiredSlotId::R19,
+        RetiredSlotId::R20,
+    ];
+
+    for slot in slots_to_check {
+        let slot = SlotId::Retired(slot);
+
+        match piv::metadata(&mut yubikey, slot) {
+            Ok(_) => {
+                eprintln!("Key {} exists", slot);
+            }
+            Err(Error::NotSupported) => {
+                // Some YubiKeys don't support metadata
+                eprintln!("metadata not supported by this YubiKey");
+                return;
+            }
+            Err(Error::NotFound) => {
+                eprintln!("Key {} doesn't exist, ok.", slot);
+                return;
+            }
+            Err(err) => panic!("{}", err),
+        }
+    }
+
+    panic!("No empty slots to check");
+}
+
+#[test]
+#[ignore]
 fn test_parse_cert_from_der() {
     let bob_der = std::fs::read("tests/assets/Bob.der").expect(".der file not found");
     let cert =

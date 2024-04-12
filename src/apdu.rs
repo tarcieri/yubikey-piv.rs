@@ -395,6 +395,9 @@ pub(crate) enum StatusWords {
     /// Not enough memory
     NoSpaceError,
 
+    /// Referenced data or reference data not found
+    ReferenceDataNotFoundError,
+
     //
     // Custom Yubico Status Word extensions
     //
@@ -428,6 +431,7 @@ impl StatusWords {
             StatusWords::IncorrectParamError => 0x6a80,
             StatusWords::NotFoundError => 0x6a82,
             StatusWords::NoSpaceError => 0x6a84,
+            StatusWords::ReferenceDataNotFoundError => 0x6a88,
             StatusWords::IncorrectSlotError => 0x6b00,
             StatusWords::NotSupportedError => 0x6d00,
             StatusWords::CommandAbortedError => 0x6f00,
@@ -462,6 +466,7 @@ impl From<u16> for StatusWords {
             0x6a80 => StatusWords::IncorrectParamError,
             0x6a82 => StatusWords::NotFoundError,
             0x6a84 => StatusWords::NoSpaceError,
+            0x6a88 => StatusWords::ReferenceDataNotFoundError,
             0x6b00 => StatusWords::IncorrectSlotError,
             0x6d00 => StatusWords::NotSupportedError,
             0x6f00 => StatusWords::CommandAbortedError,
