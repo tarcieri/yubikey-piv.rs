@@ -207,23 +207,11 @@ pub enum PublicKeyInfo {
     /// EC P-384 keys
     EcP384(EcPublicKey<NistP384>),
 
-    /// ED25519 Keys
-    Ed25519 {
-        /// ED25519 Algorithm
-        algorithm: AlgorithmId,
+    /// ED25519 keys
+    Ed25519(CvSigningKey),
 
-        /// Public key
-        pubkey: CvSigningKey,
-    },
-
-    /// X25519 Keys
-    X25519 {
-        /// X25519 Algorithm
-        algorithm: AlgorithmId,
-
-        /// Public key
-        pubkey: CvPublicKey,
-    },
+    /// X25519 keys
+    X25519(CvPublicKey),
 }
 
 impl fmt::Debug for PublicKeyInfo {
@@ -278,10 +266,9 @@ impl PublicKeyInfo {
                     .as_ref()
                     .ok_or(Error::InvalidObject)?;
                 match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519 {
-                        algorithm: AlgorithmId::Ed25519,
-                        pubkey: CvSigningKey::from(key_bytes),
-                    }),
+                    AlgorithmId::Ed25519 => {
+                        Ok(PublicKeyInfo::Ed25519(CvSigningKey::from(key_bytes)))
+                    }
                     _ => Err(Error::AlgorithmError),
                 }
             }
@@ -298,10 +285,7 @@ impl PublicKeyInfo {
                     .as_ref()
                     .ok_or(Error::InvalidObject)?;
                 match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519 {
-                        algorithm: AlgorithmId::X25519,
-                        pubkey: CvPublicKey::from(key_bytes),
-                    }),
+                    AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519(CvPublicKey::from(key_bytes))),
                     _ => Err(Error::AlgorithmError),
                 }
             }
@@ -315,8 +299,8 @@ impl PublicKeyInfo {
             PublicKeyInfo::Rsa { algorithm, .. } => *algorithm,
             PublicKeyInfo::EcP256(_) => AlgorithmId::EccP256,
             PublicKeyInfo::EcP384(_) => AlgorithmId::EccP384,
-            PublicKeyInfo::Ed25519 { algorithm, .. } => *algorithm,
-            PublicKeyInfo::X25519 { algorithm, .. } => *algorithm,
+            PublicKeyInfo::Ed25519(_) => AlgorithmId::Ed25519,
+            PublicKeyInfo::X25519(_) => AlgorithmId::X25519,
         }
     }
 }
@@ -337,8 +321,8 @@ impl x509::SubjectPublicKeyInfo for PublicKeyInfo {
             }
             PublicKeyInfo::EcP256(pubkey) => pubkey.as_bytes().to_vec(),
             PublicKeyInfo::EcP384(pubkey) => pubkey.as_bytes().to_vec(),
-            PublicKeyInfo::Ed25519 { pubkey, .. } => pubkey.to_bytes().to_vec(),
-            PublicKeyInfo::X25519 { pubkey, .. } => pubkey.to_bytes().to_vec(),
+            PublicKeyInfo::Ed25519(pubkey) => pubkey.to_bytes().to_vec(),
+            PublicKeyInfo::X25519(pubkey) => pubkey.to_bytes().to_vec(),
         }
     }
 }

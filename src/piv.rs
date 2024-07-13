@@ -1168,14 +1168,8 @@ fn read_public_key(
             let pk_data: [u8; 32] = tlv.value.try_into().map_err(|_| Error::InvalidObject)?;
 
             match algorithm {
-                AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519 {
-                    algorithm: AlgorithmId::Ed25519,
-                    pubkey: CvSigningKey::from(pk_data),
-                }),
-                AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519 {
-                    algorithm: AlgorithmId::X25519,
-                    pubkey: CvPublicKey::from(pk_data),
-                }),
+                AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519(CvSigningKey::from(pk_data))),
+                AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519(CvPublicKey::from(pk_data))),
                 _ => return Err(Error::AlgorithmError),
             }
         }

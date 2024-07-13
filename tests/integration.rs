@@ -266,7 +266,7 @@ fn generate_self_signed_cv_cert() {
     //
 
     let pubkey = match cert.subject_pki() {
-        PublicKeyInfo::Ed25519 { pubkey, .. } => pubkey,
+        PublicKeyInfo::Ed25519(pubkey) => pubkey,
         _ => unreachable!(),
     };
 
