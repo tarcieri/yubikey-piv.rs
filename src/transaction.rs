@@ -311,6 +311,19 @@ impl<'tx> Transaction<'tx> {
                     return Err(Error::SizeError);
                 }
             }
+            AlgorithmId::X25519 => {
+                if !decipher {
+                    return Err(Error::NotSupported);
+                }
+                if in_len != 32 {
+                    return Err(Error::SizeError);
+                }
+            }
+            AlgorithmId::Ed25519 => {
+                if decipher {
+                    return Err(Error::NotSupported);
+                }
+            }
         }
 
         let bytes = if in_len < 0x80 {

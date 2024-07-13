@@ -40,15 +40,17 @@ use crate::{
     Buffer,
 };
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{SecretKey as CvSecretKey, SigningKey as CvSigningKey};
 use elliptic_curve::sec1::EncodedPoint as EcPublicKey;
 use log::error;
 use num_bigint_dig::BigUint;
 use p256::NistP256;
 use p384::NistP384;
 use rsa::{PublicKeyParts, RsaPublicKey};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use std::fmt::Display;
 use std::{fmt, ops::DerefMut};
+use x25519_dalek::PublicKey as CvPublicKey;
 use x509::{der::Oid, RelativeDistinguishedName};
 use x509_parser::{parse_x509_certificate, x509::SubjectPublicKeyInfo};
 use zeroize::Zeroizing;
@@ -58,6 +60,8 @@ const OID_RSA_ENCRYPTION: &str = "1.2.840.113549.1.1.1";
 const OID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
 const OID_NIST_P256: &str = "1.2.840.10045.3.1.7";
 const OID_NIST_P384: &str = "1.3.132.0.34";
+const OID_X25519: &str = "1.3.101.110";
+const OID_ED25519: &str = "1.3.101.112";
 
 const TAG_CERT: u8 = 0x70;
 const TAG_CERT_COMPRESS: u8 = 0x71;
@@ -157,6 +161,9 @@ impl x509::AlgorithmIdentifier for AlgorithmId {
             AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => &[1, 2, 840, 113_549, 1, 1, 1],
             // EC Public Key
             AlgorithmId::EccP256 | AlgorithmId::EccP384 => &[1, 2, 840, 10045, 2, 1],
+            // CV Public Key
+            AlgorithmId::X25519 => &[1, 3, 101, 110],
+            AlgorithmId::Ed25519 => &[1, 3, 101, 112],
         }
     }
 
@@ -199,6 +206,24 @@ pub enum PublicKeyInfo {
 
     /// EC P-384 keys
     EcP384(EcPublicKey<NistP384>),
+
+    /// ED25519 Keys
+    Ed25519 {
+        /// ED25519 Algorithm
+        algorithm: AlgorithmId,
+
+        /// Public key
+        pubkey: CvSigningKey,
+    },
+
+    /// X25519 Keys
+    X25519 {
+        /// X25519 Algorithm
+        algorithm: AlgorithmId,
+
+        /// Public key
+        pubkey: CvPublicKey,
+    },
 }
 
 impl fmt::Debug for PublicKeyInfo {
@@ -240,6 +265,46 @@ impl PublicKeyInfo {
                     _ => Err(Error::AlgorithmError),
                 }
             }
+            OID_ED25519 => {
+                let key_bytes: CvSecretKey = subject_pki
+                    .subject_public_key
+                    .data
+                    .to_vec()
+                    .try_into()
+                    .unwrap();
+                let algorithm_parameters = subject_pki
+                    .algorithm
+                    .parameters
+                    .as_ref()
+                    .ok_or(Error::InvalidObject)?;
+                match read_pki::cv_parameters(algorithm_parameters)? {
+                    AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519 {
+                        algorithm: AlgorithmId::Ed25519,
+                        pubkey: CvSigningKey::from(key_bytes),
+                    }),
+                    _ => Err(Error::AlgorithmError),
+                }
+            }
+            OID_X25519 => {
+                let key_bytes: CvSecretKey = subject_pki
+                    .subject_public_key
+                    .data
+                    .to_vec()
+                    .try_into()
+                    .unwrap();
+                let algorithm_parameters = subject_pki
+                    .algorithm
+                    .parameters
+                    .as_ref()
+                    .ok_or(Error::InvalidObject)?;
+                match read_pki::cv_parameters(algorithm_parameters)? {
+                    AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519 {
+                        algorithm: AlgorithmId::X25519,
+                        pubkey: CvPublicKey::from(key_bytes),
+                    }),
+                    _ => Err(Error::AlgorithmError),
+                }
+            }
             _ => Err(Error::InvalidObject),
         }
     }
@@ -250,6 +315,8 @@ impl PublicKeyInfo {
             PublicKeyInfo::Rsa { algorithm, .. } => *algorithm,
             PublicKeyInfo::EcP256(_) => AlgorithmId::EccP256,
             PublicKeyInfo::EcP384(_) => AlgorithmId::EccP384,
+            PublicKeyInfo::Ed25519 { algorithm, .. } => *algorithm,
+            PublicKeyInfo::X25519 { algorithm, .. } => *algorithm,
         }
     }
 }
@@ -270,6 +337,8 @@ impl x509::SubjectPublicKeyInfo for PublicKeyInfo {
             }
             PublicKeyInfo::EcP256(pubkey) => pubkey.as_bytes().to_vec(),
             PublicKeyInfo::EcP384(pubkey) => pubkey.as_bytes().to_vec(),
+            PublicKeyInfo::Ed25519 { pubkey, .. } => pubkey.to_bytes().to_vec(),
+            PublicKeyInfo::X25519 { pubkey, .. } => pubkey.to_bytes().to_vec(),
         }
     }
 }
@@ -314,6 +383,8 @@ enum SignatureId {
     ///
     /// See RFC 5758.
     EcdsaWithSha256,
+
+    EdWithSha512,
 }
 
 impl x509::AlgorithmIdentifier for SignatureId {
@@ -323,6 +394,7 @@ impl x509::AlgorithmIdentifier for SignatureId {
         match self {
             SignatureId::Sha256WithRsaEncryption => &[1, 2, 840, 113_549, 1, 1, 11],
             SignatureId::EcdsaWithSha256 => &[1, 2, 840, 10045, 4, 3, 2],
+            SignatureId::EdWithSha512 => &[1, 3, 6, 1, 5, 5, 7, 0, 54],
         }
     }
 
@@ -377,6 +449,8 @@ impl Certificate {
         let signature_algorithm = match subject_pki.algorithm() {
             AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => SignatureId::Sha256WithRsaEncryption,
             AlgorithmId::EccP256 | AlgorithmId::EccP384 => SignatureId::EcdsaWithSha256,
+            AlgorithmId::Ed25519 => SignatureId::EdWithSha512,
+            AlgorithmId::X25519 => return Err(Error::NotSupported),
         };
 
         cookie_factory::gen(
@@ -436,6 +510,12 @@ impl Certificate {
             SignatureId::EcdsaWithSha256 => sign_data(
                 yubikey,
                 &Sha256::digest(&tbs_cert),
+                subject_pki.algorithm(),
+                key,
+            ),
+            SignatureId::EdWithSha512 => sign_data(
+                yubikey,
+                &Sha512::digest(&tbs_cert),
                 subject_pki.algorithm(),
                 key,
             ),
@@ -616,6 +696,7 @@ mod read_pki {
     use nom::{combinator, sequence::pair, IResult};
     use rsa::{BigUint, RsaPublicKey};
 
+    use super::{OID_ED25519, OID_X25519};
     use super::{OID_NIST_P256, OID_NIST_P384};
     use crate::{piv::AlgorithmId, Error, Result};
 
@@ -668,6 +749,16 @@ mod read_pki {
         match curve_oid.to_string().as_str() {
             OID_NIST_P256 => Ok(AlgorithmId::EccP256),
             OID_NIST_P384 => Ok(AlgorithmId::EccP384),
+            _ => Err(Error::AlgorithmError),
+        }
+    }
+
+    pub(super) fn cv_parameters(parameters: &Any<'_>) -> Result<AlgorithmId> {
+        let curve_oid = parameters.as_oid().map_err(|_| Error::InvalidObject)?;
+
+        match curve_oid.to_string().as_str() {
+            OID_ED25519 => Ok(AlgorithmId::Ed25519),
+            OID_X25519 => Ok(AlgorithmId::X25519),
             _ => Err(Error::AlgorithmError),
         }
     }
