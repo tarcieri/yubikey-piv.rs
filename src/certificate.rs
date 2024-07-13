@@ -40,7 +40,7 @@ use crate::{
     Buffer,
 };
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{SecretKey as CvSecretKey, SigningKey as CvSigningKey};
+use ed25519_dalek::SigningKey as CvSigningKey;
 use elliptic_curve::sec1::EncodedPoint as EcPublicKey;
 use log::error;
 use num_bigint_dig::BigUint;
@@ -266,7 +266,7 @@ impl PublicKeyInfo {
                 }
             }
             OID_ED25519 => {
-                let key_bytes: CvSecretKey = subject_pki
+                let key_bytes: [u8; 32] = subject_pki
                     .subject_public_key
                     .data
                     .to_vec()
@@ -286,7 +286,7 @@ impl PublicKeyInfo {
                 }
             }
             OID_X25519 => {
-                let key_bytes: CvSecretKey = subject_pki
+                let key_bytes: [u8; 32] = subject_pki
                     .subject_public_key
                     .data
                     .to_vec()
