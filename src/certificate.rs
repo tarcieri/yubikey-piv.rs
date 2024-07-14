@@ -40,14 +40,14 @@ use crate::{
     Buffer,
 };
 use chrono::{DateTime, Utc};
-use ed25519_dalek::SigningKey as CvSigningKey;
+use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey as CvVerifyingKey};
 use elliptic_curve::sec1::EncodedPoint as EcPublicKey;
 use log::error;
 use num_bigint_dig::BigUint;
 use p256::NistP256;
 use p384::NistP384;
 use rsa::{PublicKeyParts, RsaPublicKey};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{fmt, ops::DerefMut};
 use x25519_dalek::PublicKey as CvPublicKey;
@@ -208,7 +208,7 @@ pub enum PublicKeyInfo {
     EcP384(EcPublicKey<NistP384>),
 
     /// ED25519 keys
-    Ed25519(CvSigningKey),
+    Ed25519(CvVerifyingKey),
 
     /// X25519 keys
     X25519(CvPublicKey),
@@ -254,21 +254,16 @@ impl PublicKeyInfo {
                 }
             }
             OID_ED25519 => {
-                let key_bytes: [u8; 32] = subject_pki
-                    .subject_public_key
-                    .data
-                    .to_vec()
-                    .try_into()
-                    .unwrap();
+                let key_bytes = &subject_pki.subject_public_key.data;
                 let algorithm_parameters = subject_pki
                     .algorithm
                     .parameters
                     .as_ref()
                     .ok_or(Error::InvalidObject)?;
                 match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::Ed25519 => {
-                        Ok(PublicKeyInfo::Ed25519(CvSigningKey::from(key_bytes)))
-                    }
+                    AlgorithmId::Ed25519 => CvVerifyingKey::from_public_key_der(key_bytes)
+                        .map(PublicKeyInfo::Ed25519)
+                        .map_err(|_| Error::InvalidObject),
                     _ => Err(Error::AlgorithmError),
                 }
             }
@@ -368,7 +363,7 @@ enum SignatureId {
     /// See RFC 5758.
     EcdsaWithSha256,
 
-    EdWithSha512,
+    Ed25519,
 }
 
 impl x509::AlgorithmIdentifier for SignatureId {
@@ -378,7 +373,7 @@ impl x509::AlgorithmIdentifier for SignatureId {
         match self {
             SignatureId::Sha256WithRsaEncryption => &[1, 2, 840, 113_549, 1, 1, 11],
             SignatureId::EcdsaWithSha256 => &[1, 2, 840, 10045, 4, 3, 2],
-            SignatureId::EdWithSha512 => &[1, 3, 6, 1, 5, 5, 7, 0, 54],
+            SignatureId::Ed25519 => &[1, 3, 101, 112],
         }
     }
 
@@ -433,7 +428,7 @@ impl Certificate {
         let signature_algorithm = match subject_pki.algorithm() {
             AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => SignatureId::Sha256WithRsaEncryption,
             AlgorithmId::EccP256 | AlgorithmId::EccP384 => SignatureId::EcdsaWithSha256,
-            AlgorithmId::Ed25519 => SignatureId::EdWithSha512,
+            AlgorithmId::Ed25519 => SignatureId::Ed25519,
             AlgorithmId::X25519 => return Err(Error::NotSupported),
         };
 
@@ -497,12 +492,7 @@ impl Certificate {
                 subject_pki.algorithm(),
                 key,
             ),
-            SignatureId::EdWithSha512 => sign_data(
-                yubikey,
-                &Sha512::digest(&tbs_cert),
-                subject_pki.algorithm(),
-                key,
-            ),
+            SignatureId::Ed25519 => sign_data(yubikey, &tbs_cert, subject_pki.algorithm(), key),
         }?;
 
         let mut data = Buffer::new(Vec::with_capacity(CB_OBJ_MAX));

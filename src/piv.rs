@@ -53,7 +53,7 @@ use crate::{
     yubikey::YubiKey,
     Buffer, ObjectId,
 };
-use ed25519_dalek::SigningKey as CvSigningKey;
+use ed25519_dalek::VerifyingKey as CvVerifyingKey;
 use elliptic_curve::sec1::EncodedPoint as EcPublicKey;
 use log::{debug, error, warn};
 use p256::NistP256;
@@ -1168,7 +1168,9 @@ fn read_public_key(
             let pk_data: [u8; 32] = tlv.value.try_into().map_err(|_| Error::InvalidObject)?;
 
             match algorithm {
-                AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519(CvSigningKey::from(pk_data))),
+                AlgorithmId::Ed25519 => CvVerifyingKey::from_bytes(&pk_data)
+                    .map(PublicKeyInfo::Ed25519)
+                    .map_err(|_| Error::InvalidObject),
                 AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519(CvPublicKey::from(pk_data))),
                 _ => return Err(Error::AlgorithmError),
             }

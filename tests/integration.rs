@@ -274,15 +274,13 @@ fn generate_self_signed_cv_cert() {
     let cert_len = data[2] as usize;
     let tbs_cert_len = data[5] as usize;
     let sig_algo_len: usize = 64;
-    let sig_start = cert_len - sig_algo_len;
-    // FIXME: Not sure what the msg should be for Ed25519 signed x509 cert
-    let msg = &data[6..9 + tbs_cert_len];
+    let sig_start = cert_len - sig_algo_len + 3;
+    let msg = &data[3..6 + tbs_cert_len];
     let sig =
         ed25519_dalek::Signature::from_slice(&data[sig_start..sig_start + sig_algo_len]).unwrap();
-    let vk = ed25519_dalek::VerifyingKey::from(pubkey);
 
     use ed25519_dalek::Verifier;
-    assert!(vk.verify(msg, &sig).is_ok());
+    assert!(pubkey.verify(msg, &sig).is_ok());
 }
 
 #[test]
