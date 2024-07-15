@@ -40,7 +40,7 @@ use crate::{
     Buffer,
 };
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{pkcs8::DecodePublicKey, VerifyingKey as CvVerifyingKey};
+use ed25519_dalek::VerifyingKey as CvVerifyingKey;
 use elliptic_curve::sec1::EncodedPoint as EcPublicKey;
 use log::error;
 use num_bigint_dig::BigUint;
@@ -254,16 +254,21 @@ impl PublicKeyInfo {
                 }
             }
             OID_ED25519 => {
-                let key_bytes = &subject_pki.subject_public_key.data;
+                let key_bytes: [u8; 32] = subject_pki
+                    .subject_public_key
+                    .data
+                    .to_vec()
+                    .try_into()
+                    .map_err(|_| Error::InvalidObject)?;
                 let algorithm_parameters = subject_pki
                     .algorithm
                     .parameters
                     .as_ref()
                     .ok_or(Error::InvalidObject)?;
                 match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::Ed25519 => CvVerifyingKey::from_public_key_der(key_bytes)
-                        .map(PublicKeyInfo::Ed25519)
-                        .map_err(|_| Error::InvalidObject),
+                    AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519(
+                        CvVerifyingKey::from_bytes(&key_bytes).map_err(|_| Error::InvalidObject)?,
+                    )),
                     _ => Err(Error::AlgorithmError),
                 }
             }
@@ -273,7 +278,7 @@ impl PublicKeyInfo {
                     .data
                     .to_vec()
                     .try_into()
-                    .unwrap();
+                    .map_err(|_| Error::InvalidObject)?;
                 let algorithm_parameters = subject_pki
                     .algorithm
                     .parameters
