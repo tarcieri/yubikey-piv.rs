@@ -256,38 +256,20 @@ impl PublicKeyInfo {
             OID_ED25519 => {
                 let key_bytes: [u8; 32] = subject_pki
                     .subject_public_key
-                    .data
-                    .to_vec()
+                    .as_ref()
                     .try_into()
                     .map_err(|_| Error::InvalidObject)?;
-                let algorithm_parameters = subject_pki
-                    .algorithm
-                    .parameters
-                    .as_ref()
-                    .ok_or(Error::InvalidObject)?;
-                match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::Ed25519 => Ok(PublicKeyInfo::Ed25519(
-                        CvVerifyingKey::from_bytes(&key_bytes).map_err(|_| Error::InvalidObject)?,
-                    )),
-                    _ => Err(Error::AlgorithmError),
-                }
+                Ok(PublicKeyInfo::Ed25519(
+                    CvVerifyingKey::from_bytes(&key_bytes).map_err(|_| Error::InvalidObject)?,
+                ))
             }
             OID_X25519 => {
                 let key_bytes: [u8; 32] = subject_pki
                     .subject_public_key
-                    .data
-                    .to_vec()
+                    .as_ref()
                     .try_into()
                     .map_err(|_| Error::InvalidObject)?;
-                let algorithm_parameters = subject_pki
-                    .algorithm
-                    .parameters
-                    .as_ref()
-                    .ok_or(Error::InvalidObject)?;
-                match read_pki::cv_parameters(algorithm_parameters)? {
-                    AlgorithmId::X25519 => Ok(PublicKeyInfo::X25519(CvPublicKey::from(key_bytes))),
-                    _ => Err(Error::AlgorithmError),
-                }
+                Ok(PublicKeyInfo::X25519(CvPublicKey::from(key_bytes)))
             }
             _ => Err(Error::InvalidObject),
         }

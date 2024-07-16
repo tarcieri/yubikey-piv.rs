@@ -340,7 +340,9 @@ impl<'tx> Transaction<'tx> {
                 Tlv::write(
                     &mut buf[2..],
                     match (algorithm, decipher) {
-                        (AlgorithmId::EccP256, true) | (AlgorithmId::EccP384, true) => 0x85,
+                        (AlgorithmId::EccP256, true)
+                        | (AlgorithmId::EccP384, true)
+                        | (AlgorithmId::X25519, true) => 0x85,
                         _ => 0x81,
                     },
                     sign_in
