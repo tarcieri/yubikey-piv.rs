@@ -657,7 +657,6 @@ mod read_pki {
     use nom::{combinator, sequence::pair, IResult};
     use rsa::{BigUint, RsaPublicKey};
 
-    use super::{OID_ED25519, OID_X25519};
     use super::{OID_NIST_P256, OID_NIST_P384};
     use crate::{piv::AlgorithmId, Error, Result};
 
@@ -710,16 +709,6 @@ mod read_pki {
         match curve_oid.to_string().as_str() {
             OID_NIST_P256 => Ok(AlgorithmId::EccP256),
             OID_NIST_P384 => Ok(AlgorithmId::EccP384),
-            _ => Err(Error::AlgorithmError),
-        }
-    }
-
-    pub(super) fn cv_parameters(parameters: &Any<'_>) -> Result<AlgorithmId> {
-        let curve_oid = parameters.as_oid().map_err(|_| Error::InvalidObject)?;
-
-        match curve_oid.to_string().as_str() {
-            OID_ED25519 => Ok(AlgorithmId::Ed25519),
-            OID_X25519 => Ok(AlgorithmId::X25519),
             _ => Err(Error::AlgorithmError),
         }
     }
