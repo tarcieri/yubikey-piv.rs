@@ -36,7 +36,7 @@ use crate::{
     chuid::ChuId,
     config::Config,
     error::{Error, Result},
-    mgm::MgmKey,
+    mgm::{MgmKey, MgmKeyAlgorithm},
     piv,
     reader::{Context, Reader},
     transaction::Transaction,
@@ -65,9 +65,6 @@ use {
 
 /// Flag for PUK blocked
 pub(crate) const ADMIN_FLAGS_1_PUK_BLOCKED: u8 = 0x01;
-
-/// 3DES authentication
-pub(crate) const ALGO_3DES: u8 = 0x03;
 
 /// Card management key
 pub(crate) const KEY_CARDMGM: u8 = 0x9b;
@@ -198,8 +195,8 @@ impl YubiKey {
                 if let Some(yk_stored) = yubikey {
                     // We found two YubiKeys, so we won't use either.
                     // Don't reset them.
-                    let _ = yk_stored.disconnect(pcsc::Disposition::LeaveCard);
-                    let _ = yk_found.disconnect(pcsc::Disposition::LeaveCard);
+                    let _ = yk_stored.disconnect(Disposition::LeaveCard);
+                    let _ = yk_found.disconnect(Disposition::LeaveCard);
 
                     error!("multiple YubiKeys detected!");
                     return Err(Error::PcscError { inner: None });
@@ -246,7 +243,7 @@ impl YubiKey {
                 return Ok(yubikey);
             } else {
                 // We didn't want this YubiKey; don't reset it.
-                let _ = yubikey.disconnect(pcsc::Disposition::LeaveCard);
+                let _ = yubikey.disconnect(Disposition::LeaveCard);
             }
         }
 
@@ -266,7 +263,7 @@ impl YubiKey {
         self.card.reconnect(
             pcsc::ShareMode::Shared,
             pcsc::Protocols::T1,
-            pcsc::Disposition::ResetCard,
+            Disposition::ResetCard,
         )?;
 
         let pin = self
@@ -357,37 +354,43 @@ impl YubiKey {
     }
 
     /// Authenticate to the card using the provided management key (MGM).
-    pub fn authenticate(&mut self, mgm_key: MgmKey) -> Result<()> {
+    pub fn authenticate<C: MgmKeyAlgorithm>(&mut self, mgm_key: MgmKey<C>) -> Result<()> {
         let txn = self.begin_transaction()?;
 
         // get a challenge from the card
-        let challenge = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
+        let card_response = Apdu::new(Ins::Authenticate)
+            .params(mgm_key.algorithm_id(), KEY_CARDMGM)
             .data([TAG_DYN_AUTH, 0x02, 0x80, 0x00])
             .transmit(&txn, 261)?;
 
-        if !challenge.is_success() || challenge.data().len() < 12 {
+        if !card_response.is_success() || card_response.data().len() < 5 {
             return Err(Error::AuthenticationError);
         }
 
         // send a response to the cards challenge and a challenge of our own.
-        let response = mgm_key.decrypt(challenge.data()[4..12].try_into()?);
+        let card_challenge = mgm_key.card_challenge(&card_response.data()[4..])?;
+        let challenge_len = card_challenge.len();
 
-        let mut data = [0u8; 22];
-        data[0] = TAG_DYN_AUTH;
-        data[1] = 20; // 2 + 8 + 2 +8
-        data[2] = 0x80;
-        data[3] = 8;
-        data[4..12].copy_from_slice(&response);
-        data[12] = 0x81;
-        data[13] = 8;
-        OsRng.fill_bytes(&mut data[14..22]);
+        let mut data = Vec::with_capacity(4 + challenge_len + 2 + challenge_len);
+        data.push(TAG_DYN_AUTH);
+        data.push(
+            (2 + challenge_len + 2 + challenge_len)
+                .try_into()
+                .expect("value fits in u8"),
+        );
+        data.push(0x80);
+        data.push(challenge_len as u8);
+        data.extend_from_slice(&card_challenge);
+        data.push(0x81);
+        data.push(challenge_len as u8);
 
-        let mut challenge = [0u8; 8];
-        challenge.copy_from_slice(&data[14..22]);
+        let mut host_challenge = vec![0u8; challenge_len];
+        OsRng.fill_bytes(&mut host_challenge);
+
+        data.extend_from_slice(&host_challenge);
 
         let authentication = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
+            .params(mgm_key.algorithm_id(), KEY_CARDMGM)
             .data(data)
             .transmit(&txn, 261)?;
 
@@ -396,14 +399,7 @@ impl YubiKey {
         }
 
         // compare the response from the card with our challenge
-        let response = mgm_key.encrypt(&challenge);
-
-        use subtle::ConstantTimeEq;
-        if response.ct_eq(&authentication.data()[4..12]).unwrap_u8() != 1 {
-            return Err(Error::AuthenticationError);
-        }
-
-        Ok(())
+        mgm_key.check_challenge(&host_challenge, &authentication.data()[4..])
     }
 
     /// Get the PIV keys contained in this YubiKey.
@@ -633,53 +629,6 @@ impl YubiKey {
         txn.save_object(object_id, indata)
     }
 
-    /// Get an auth challenge.
-    #[cfg(feature = "untested")]
-    pub fn get_auth_challenge(&mut self) -> Result<[u8; 8]> {
-        let txn = self.begin_transaction()?;
-
-        let response = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
-            .data([0x7c, 0x02, 0x81, 0x00])
-            .transmit(&txn, 261)?;
-
-        if !response.is_success() {
-            return Err(Error::AuthenticationError);
-        }
-
-        Ok(response
-            .data()
-            .get(4..12)
-            .ok_or(Error::SizeError)?
-            .try_into()?)
-    }
-
-    /// Verify an auth response.
-    #[cfg(feature = "untested")]
-    pub fn verify_auth_response(&mut self, response: [u8; 8]) -> Result<()> {
-        let mut data = [0u8; 12];
-        data[0] = 0x7c;
-        data[1] = 0x0a;
-        data[2] = 0x82;
-        data[3] = 0x08;
-        data[4..12].copy_from_slice(&response);
-
-        let txn = self.begin_transaction()?;
-
-        // send the response to the card and a challenge of our own.
-        let status_words = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
-            .data(data)
-            .transmit(&txn, 261)?
-            .status_words();
-
-        if !status_words.is_success() {
-            return Err(Error::AuthenticationError);
-        }
-
-        Ok(())
-    }
-
     /// Reset YubiKey.
     ///
     /// WARNING: this is a destructive operation which will destroy all keys!
@@ -727,7 +676,7 @@ impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
                 // a side-effect of determining this. Avoid disrupting its internal state
                 // any further (e.g. preserve the PIN cache of whatever applet is selected
                 // currently).
-                if let Err((_, e)) = card.disconnect(pcsc::Disposition::LeaveCard) {
+                if let Err((_, e)) = card.disconnect(Disposition::LeaveCard) {
                     error!("Failed to disconnect gracefully from card: {}", e);
                 }
 

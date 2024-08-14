@@ -192,8 +192,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<x509_cert::der::Error> for Error {
-    fn from(_err: x509_cert::der::Error) -> Error {
+impl From<der::Error> for Error {
+    fn from(_err: der::Error) -> Error {
         Error::ParseError
     }
 }

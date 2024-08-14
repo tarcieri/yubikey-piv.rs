@@ -32,7 +32,7 @@
 
 use crate::{Error, Result};
 use log::error;
-use rand_core::{OsRng, RngCore};
+use rand_core::OsRng;
 use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "untested")]
@@ -41,10 +41,12 @@ use crate::{
     metadata::{AdminData, ProtectedData},
     yubikey::YubiKey,
 };
-use des::{
-    cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit},
-    TdesEde3,
+use cipher::{
+    crypto_common::{Key, KeyInit},
+    generic_array::GenericArray,
+    BlockCipher, BlockDecrypt, BlockEncrypt,
 };
+
 #[cfg(feature = "untested")]
 use {pbkdf2::pbkdf2_hmac, sha1::Sha1};
 
@@ -66,8 +68,10 @@ const CB_ADMIN_SALT: usize = 16;
 /// Size of a DES key
 const DES_LEN_DES: usize = 8;
 
-/// Size of a 3DES key
-pub(crate) const DES_LEN_3DES: usize = DES_LEN_DES * 3;
+/// The default MGM key loaded for both Triple-DES and AES keys
+const DEFAULT_MGM_KEY: [u8; 24] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8,
+];
 
 /// Number of PBKDF2 iterations to use when deriving from a password
 #[cfg(feature = "untested")]
@@ -86,44 +90,167 @@ pub enum MgmType {
     Protected = 2,
 }
 
+/// The algorithm used for the MGM key.
+pub trait MgmKeyAlgorithm:
+    BlockCipher + BlockDecrypt + BlockEncrypt + Clone + KeyInit + private::Seal
+{
+    /// The KeySized used for this algorithm
+    const KEY_SIZE: u8;
+
+    /// The algorithm ID used in APDU packets
+    const ALGORITHM_ID: u8;
+
+    /// Implemented by specializations to check if the key is weak.
+    ///
+    /// Returns an error if the key is weak.
+    fn check_weak_key(_key: &Key<Self>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl MgmKeyAlgorithm for des::TdesEde3 {
+    const KEY_SIZE: u8 = 24;
+    const ALGORITHM_ID: u8 = 0x03;
+
+    /// Is this 3DES key weak?
+    ///
+    /// This check is performed automatically when the key is instantiated to
+    /// ensure no such keys are used.
+    fn check_weak_key(key: &Key<Self>) -> Result<()> {
+        /// Weak and semi weak DES keys as taken from:
+        /// %A D.W. Davies
+        /// %A W.L. Price
+        /// %T Security for Computer Networks
+        /// %I John Wiley & Sons
+        /// %D 1984
+        const WEAK_DES_KEYS: &[[u8; DES_LEN_DES]] = &[
+            // weak keys
+            [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
+            [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE],
+            [0x1F, 0x1F, 0x1F, 0x1F, 0x0E, 0x0E, 0x0E, 0x0E],
+            [0xE0, 0xE0, 0xE0, 0xE0, 0xF1, 0xF1, 0xF1, 0xF1],
+            // semi-weak keys
+            [0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE],
+            [0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01],
+            [0x1F, 0xE0, 0x1F, 0xE0, 0x0E, 0xF1, 0x0E, 0xF1],
+            [0xE0, 0x1F, 0xE0, 0x1F, 0xF1, 0x0E, 0xF1, 0x0E],
+            [0x01, 0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1],
+            [0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1, 0x01],
+            [0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E, 0xFE],
+            [0xFE, 0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E],
+            [0x01, 0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E],
+            [0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E, 0x01],
+            [0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1, 0xFE],
+            [0xFE, 0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1],
+        ];
+
+        let key_bytes = key.as_slice();
+
+        // set odd parity of key
+        let mut tmp = Zeroizing::new([0u8; Self::KEY_SIZE as usize]);
+
+        for i in 0..(Self::KEY_SIZE as usize) {
+            // count number of set bits in byte, excluding the low-order bit - SWAR method
+            let mut c = key[i] & 0xFE;
+
+            c = (c & 0x55) + ((c >> 1) & 0x55);
+            c = (c & 0x33) + ((c >> 2) & 0x33);
+            c = (c & 0x0F) + ((c >> 4) & 0x0F);
+
+            // if count is even, set low key bit to 1, otherwise 0
+            tmp[i] = (key[i] & 0xFE) | u8::from(c & 0x01 != 0x01);
+        }
+
+        // check odd parity key against table by DES key block
+        for weak_key in WEAK_DES_KEYS.iter() {
+            if weak_key == &tmp[0..DES_LEN_DES]
+                || weak_key == &tmp[DES_LEN_DES..2 * DES_LEN_DES]
+                || weak_key == &tmp[2 * DES_LEN_DES..3 * DES_LEN_DES]
+            {
+                error!(
+                    "blacklisting key '{:?}' since it's weak (with odd parity)",
+                    &key_bytes
+                );
+
+                return Err(Error::KeyError);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl MgmKeyAlgorithm for aes::Aes128 {
+    const KEY_SIZE: u8 = 16;
+    const ALGORITHM_ID: u8 = 0x08;
+}
+
+impl MgmKeyAlgorithm for aes::Aes192 {
+    const KEY_SIZE: u8 = 24;
+    const ALGORITHM_ID: u8 = 0x0A;
+}
+
+impl MgmKeyAlgorithm for aes::Aes256 {
+    const KEY_SIZE: u8 = 32;
+    const ALGORITHM_ID: u8 = 0x0C;
+}
+
 /// Management Key (MGM).
 ///
 /// This key is used to authenticate to the management applet running on
 /// a YubiKey in order to perform administrative functions.
 ///
-/// The only supported algorithm for MGM keys is 3DES.
+/// The only supported algorithm for MGM keys are 3DES and AES.
 #[derive(Clone)]
-pub struct MgmKey([u8; DES_LEN_3DES]);
+pub struct MgmKey<C: MgmKeyAlgorithm> {
+    key: Key<C>,
+    _cipher: std::marker::PhantomData<C>,
+}
 
-impl MgmKey {
+/// A Management Key (MGM) using Triple-DES
+pub type MgmKey3Des = MgmKey<des::TdesEde3>;
+
+/// A Management Key (MGM) using AES-128
+pub type MgmKeyAes128 = MgmKey<aes::Aes128>;
+
+/// A Management Key (MGM) using AES-192
+pub type MgmKeyAes192 = MgmKey<aes::Aes192>;
+
+/// A Management Key (MGM) using AES-256
+pub type MgmKeyAes256 = MgmKey<aes::Aes256>;
+
+impl<C: MgmKeyAlgorithm> MgmKey<C> {
     /// Generate a random MGM key
     pub fn generate() -> Self {
-        let mut key_bytes = [0u8; DES_LEN_3DES];
-        OsRng.fill_bytes(&mut key_bytes);
-        Self(key_bytes)
+        let key = C::generate_key(&mut OsRng);
+        Self {
+            key,
+            _cipher: std::marker::PhantomData,
+        }
     }
 
     /// Create an MGM key from byte slice.
     ///
     /// Returns an error if the slice is the wrong size or the key is weak.
     pub fn from_bytes(bytes: impl AsRef<[u8]>) -> Result<Self> {
-        bytes.as_ref().try_into()
-    }
-
-    /// Create an MGM key from the given byte array.
-    ///
-    /// Returns an error if the key is weak.
-    pub fn new(key_bytes: [u8; DES_LEN_3DES]) -> Result<Self> {
-        if is_weak_key(&key_bytes) {
-            error!(
-                "blacklisting key '{:?}' since it's weak (with odd parity)",
-                &key_bytes
-            );
-
-            return Err(Error::KeyError);
+        let bytes = bytes.as_ref();
+        if bytes.len() != C::key_size() {
+            return Err(Error::SizeError);
         }
 
-        Ok(Self(key_bytes))
+        let key = Key::<C>::from_slice(bytes);
+        Self::new(key.clone())
+    }
+
+    /// Create an MGM key from the given key.
+    ///
+    /// Returns an error if the key is weak.
+    pub fn new(key: Key<C>) -> Result<Self> {
+        C::check_weak_key(&key)?;
+        Ok(Self {
+            key,
+            _cipher: std::marker::PhantomData,
+        })
     }
 
     /// Get derived management key (MGM)
@@ -145,7 +272,7 @@ impl MgmKey {
             return Err(Error::GenericError);
         }
 
-        let mut mgm = [0u8; DES_LEN_3DES];
+        let mut mgm = vec![0u8; C::KEY_SIZE as usize];
         pbkdf2_hmac::<Sha1>(pin, salt, ITER_MGM_PBKDF2, &mut mgm);
         MgmKey::from_bytes(mgm)
     }
@@ -165,11 +292,11 @@ impl MgmKey {
             e
         })?;
 
-        if item.len() != DES_LEN_3DES {
+        if item.len() != C::KEY_SIZE as usize {
             error!(
                 "protected data contains MGM, but is the wrong size: {} (expected {})",
                 item.len(),
-                DES_LEN_3DES
+                C::KEY_SIZE
             );
 
             return Err(Error::AuthenticationError);
@@ -183,7 +310,7 @@ impl MgmKey {
     /// This will wipe any metadata related to derived and PIN-protected management keys.
     #[cfg(feature = "untested")]
     pub fn set_default(yubikey: &mut YubiKey) -> Result<()> {
-        MgmKey::default().set_manual(yubikey, false)
+        Self::default().set_manual(yubikey, false)
     }
 
     /// Configures the given YubiKey to use this management key.
@@ -319,111 +446,84 @@ impl MgmKey {
         Ok(())
     }
 
-    /// Encrypt with 3DES key
-    pub(crate) fn encrypt(&self, input: &[u8; DES_LEN_DES]) -> [u8; DES_LEN_DES] {
-        let mut output = input.to_owned();
-        TdesEde3::new(GenericArray::from_slice(&self.0))
-            .encrypt_block(GenericArray::from_mut_slice(&mut output));
-        output
+    /// Return the size of the key used in management operations for a given algorithm
+    pub const fn key_size(&self) -> u8 {
+        C::KEY_SIZE
     }
 
-    /// Decrypt with 3DES key
-    pub(crate) fn decrypt(&self, input: &[u8; DES_LEN_DES]) -> [u8; DES_LEN_DES] {
-        let mut output = input.to_owned();
-        TdesEde3::new(GenericArray::from_slice(&self.0))
-            .decrypt_block(GenericArray::from_mut_slice(&mut output));
-        output
+    /// Given a challenge from a card, decrypt it and return the value
+    pub(crate) fn card_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>> {
+        if challenge.len() != C::block_size() {
+            return Err(Error::SizeError);
+        }
+
+        let mut output = challenge.to_owned();
+
+        C::new(&self.key).decrypt_block(GenericArray::from_mut_slice(&mut output));
+
+        Ok(output)
+    }
+
+    /// Checks the authentication matches the challenge and auth data
+    pub(crate) fn check_challenge(&self, challenge: &[u8], auth_data: &[u8]) -> Result<()> {
+        let mut response = challenge.to_owned();
+
+        if challenge.len() != C::block_size() {
+            return Err(Error::AuthenticationError);
+        }
+
+        C::new(&self.key).encrypt_block(GenericArray::from_mut_slice(&mut response));
+
+        use subtle::ConstantTimeEq;
+        if response.ct_eq(auth_data).unwrap_u8() != 1 {
+            return Err(Error::AuthenticationError);
+        }
+
+        Ok(())
+    }
+
+    /// Return the ID used to identify the key algorithm with APDU packets
+    pub(crate) fn algorithm_id(&self) -> u8 {
+        C::ALGORITHM_ID
     }
 }
 
-impl AsRef<[u8; DES_LEN_3DES]> for MgmKey {
-    fn as_ref(&self) -> &[u8; DES_LEN_3DES] {
-        &self.0
+impl<C: MgmKeyAlgorithm> AsRef<[u8]> for MgmKey<C> {
+    fn as_ref(&self) -> &[u8] {
+        self.key.as_ref()
     }
 }
 
 /// Default MGM key configured on all YubiKeys
-impl Default for MgmKey {
+impl<C: MgmKeyAlgorithm> Default for MgmKey<C> {
     fn default() -> Self {
-        MgmKey([
-            1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8,
-        ])
+        let key = Key::<C>::from_slice(&DEFAULT_MGM_KEY).clone();
+        Self {
+            key,
+            _cipher: std::marker::PhantomData,
+        }
     }
 }
 
-impl Drop for MgmKey {
+impl<C: MgmKeyAlgorithm> Drop for MgmKey<C> {
     fn drop(&mut self) {
-        self.0.zeroize();
+        self.key.zeroize();
     }
 }
 
-impl<'a> TryFrom<&'a [u8]> for MgmKey {
+impl<'a, C: MgmKeyAlgorithm> TryFrom<&'a [u8]> for MgmKey<C> {
     type Error = Error;
 
     fn try_from(key_bytes: &'a [u8]) -> Result<Self> {
-        Self::new(key_bytes.try_into().map_err(|_| Error::SizeError)?)
+        Self::from_bytes(key_bytes)
     }
 }
 
-/// Weak and semi weak DES keys as taken from:
-/// %A D.W. Davies
-/// %A W.L. Price
-/// %T Security for Computer Networks
-/// %I John Wiley & Sons
-/// %D 1984
-const WEAK_DES_KEYS: &[[u8; DES_LEN_DES]] = &[
-    // weak keys
-    [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
-    [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE],
-    [0x1F, 0x1F, 0x1F, 0x1F, 0x0E, 0x0E, 0x0E, 0x0E],
-    [0xE0, 0xE0, 0xE0, 0xE0, 0xF1, 0xF1, 0xF1, 0xF1],
-    // semi-weak keys
-    [0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE],
-    [0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01],
-    [0x1F, 0xE0, 0x1F, 0xE0, 0x0E, 0xF1, 0x0E, 0xF1],
-    [0xE0, 0x1F, 0xE0, 0x1F, 0xF1, 0x0E, 0xF1, 0x0E],
-    [0x01, 0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1],
-    [0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1, 0x01],
-    [0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E, 0xFE],
-    [0xFE, 0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E],
-    [0x01, 0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E],
-    [0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E, 0x01],
-    [0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1, 0xFE],
-    [0xFE, 0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1],
-];
-
-/// Is this 3DES key weak?
-///
-/// This check is performed automatically when the key is instantiated to
-/// ensure no such keys are used.
-fn is_weak_key(key: &[u8; DES_LEN_3DES]) -> bool {
-    // set odd parity of key
-    let mut tmp = Zeroizing::new([0u8; DES_LEN_3DES]);
-
-    for i in 0..DES_LEN_3DES {
-        // count number of set bits in byte, excluding the low-order bit - SWAR method
-        let mut c = key[i] & 0xFE;
-
-        c = (c & 0x55) + ((c >> 1) & 0x55);
-        c = (c & 0x33) + ((c >> 2) & 0x33);
-        c = (c & 0x0F) + ((c >> 4) & 0x0F);
-
-        // if count is even, set low key bit to 1, otherwise 0
-        tmp[i] = (key[i] & 0xFE) | u8::from(c & 0x01 != 0x01);
-    }
-
-    // check odd parity key against table by DES key block
-    let mut is_weak = false;
-
-    for weak_key in WEAK_DES_KEYS.iter() {
-        if weak_key == &tmp[0..DES_LEN_DES]
-            || weak_key == &tmp[DES_LEN_DES..2 * DES_LEN_DES]
-            || weak_key == &tmp[2 * DES_LEN_DES..3 * DES_LEN_DES]
-        {
-            is_weak = true;
-            break;
-        }
-    }
-
-    is_weak
+// Seal the MgmKeyAlgorithm trait
+mod private {
+    pub trait Seal {}
+    impl Seal for des::TdesEde3 {}
+    impl Seal for aes::Aes128 {}
+    impl Seal for aes::Aes192 {}
+    impl Seal for aes::Aes256 {}
 }
