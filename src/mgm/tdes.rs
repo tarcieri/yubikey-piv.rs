@@ -1,10 +1,30 @@
+use cipher::Key;
 use zeroize::Zeroizing;
 
+use crate::{Error, Result};
+
+use super::{MgmAlgorithmId, MgmKeyAlgorithm, SpecificMgmKey};
+
 /// Size of a DES key
-pub(super) const DES_LEN_DES: usize = 8;
+const DES_LEN_DES: usize = 8;
 
 /// Size of a 3DES key
-pub(crate) const DES_LEN_3DES: usize = DES_LEN_DES * 3;
+const DES_LEN_3DES: usize = DES_LEN_DES * 3;
+
+impl MgmKeyAlgorithm for des::TdesEde3 {
+    const ALGORITHM_ID: MgmAlgorithmId = MgmAlgorithmId::ThreeDes;
+
+    fn check_weak_key(key: &Key<Self>) -> Result<()> {
+        if is_weak_key(key.into()) {
+            Err(Error::KeyError)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A Management Key (MGM) using Triple-DES
+pub type MgmKey3Des = SpecificMgmKey<des::TdesEde3>;
 
 /// Weak and semi weak DES keys as taken from:
 /// %A D.W. Davies
@@ -37,7 +57,7 @@ const WEAK_DES_KEYS: &[[u8; DES_LEN_DES]] = &[
 ///
 /// This check is performed automatically when the key is instantiated to
 /// ensure no such keys are used.
-pub(super) fn is_weak_key(key: &[u8; DES_LEN_3DES]) -> bool {
+fn is_weak_key(key: &[u8; DES_LEN_3DES]) -> bool {
     // set odd parity of key
     let mut tmp = Zeroizing::new([0u8; DES_LEN_3DES]);
 
