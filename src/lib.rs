@@ -71,7 +71,7 @@ pub use crate::{
     chuid::ChuId,
     config::Config,
     error::{Error, Result},
-    mgm::{MgmKey, MgmType},
+    mgm::{MgmAlgorithmId, MgmKey, MgmType},
     piv::Key,
     policy::{PinPolicy, TouchPolicy},
     reader::Context,

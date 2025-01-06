@@ -33,12 +33,14 @@
 use crate::{Error, Result};
 use log::error;
 use rand_core::{OsRng, RngCore};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 #[cfg(feature = "untested")]
 use crate::{
     consts::{TAG_ADMIN_FLAGS_1, TAG_ADMIN_SALT, TAG_PROTECTED_MGM},
     metadata::{AdminData, ProtectedData},
+    piv::{ManagementSlotId, SlotAlgorithmId},
+    transaction::Transaction,
     yubikey::YubiKey,
 };
 use des::{
@@ -58,16 +60,14 @@ pub(crate) const APPLET_NAME: &str = "YubiKey MGMT";
 #[cfg(feature = "untested")]
 pub(crate) const APPLET_ID: &[u8] = &[0xa0, 0x00, 0x00, 0x05, 0x27, 0x47, 0x11, 0x17];
 
+mod tdes;
+pub(crate) use tdes::DES_LEN_3DES;
+use tdes::DES_LEN_DES;
+
 pub(crate) const ADMIN_FLAGS_1_PROTECTED_MGM: u8 = 0x02;
 
 #[cfg(feature = "untested")]
 const CB_ADMIN_SALT: usize = 16;
-
-/// Size of a DES key
-const DES_LEN_DES: usize = 8;
-
-/// Size of a 3DES key
-pub(crate) const DES_LEN_3DES: usize = DES_LEN_DES * 3;
 
 /// Number of PBKDF2 iterations to use when deriving from a password
 #[cfg(feature = "untested")]
@@ -84,6 +84,53 @@ pub enum MgmType {
 
     /// Protected
     Protected = 2,
+}
+
+/// Management key algorithm identifiers
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MgmAlgorithmId {
+    /// Triple DES (3DES) in EDE mode
+    ThreeDes,
+}
+
+impl TryFrom<u8> for MgmAlgorithmId {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0x03 => Ok(MgmAlgorithmId::ThreeDes),
+            _ => Err(Error::AlgorithmError),
+        }
+    }
+}
+
+impl From<MgmAlgorithmId> for u8 {
+    fn from(id: MgmAlgorithmId) -> u8 {
+        match id {
+            MgmAlgorithmId::ThreeDes => 0x03,
+        }
+    }
+}
+
+impl MgmAlgorithmId {
+    /// Looks up the algorithm for the given Yubikey's current management key.
+    #[cfg(feature = "untested")]
+    fn query(txn: &Transaction<'_>) -> Result<Self> {
+        match txn.get_metadata(crate::piv::SlotId::Management(ManagementSlotId::Management)) {
+            Ok(metadata) => match metadata.algorithm {
+                SlotAlgorithmId::Management(alg) => Ok(alg),
+                // We specifically queried the management key slot; getting a known
+                // non-management algorithm back from the Yubikey is invalid.
+                _ => Err(Error::InvalidObject),
+            },
+            // Firmware versions without `GET METADATA` only support 3DES.
+            Err(Error::NotSupported) => Ok(MgmAlgorithmId::ThreeDes),
+            // `Error::AlgorithmError` only occurs when a new algorithm is encountered.
+            Err(Error::AlgorithmError) => Err(Error::NotSupported),
+            // Raise other errors as-is.
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// Management Key (MGM).
@@ -114,7 +161,7 @@ impl MgmKey {
     ///
     /// Returns an error if the key is weak.
     pub fn new(key_bytes: [u8; DES_LEN_3DES]) -> Result<Self> {
-        if is_weak_key(&key_bytes) {
+        if tdes::is_weak_key(&key_bytes) {
             error!(
                 "blacklisting key '{:?}' since it's weak (with odd parity)",
                 &key_bytes
@@ -130,6 +177,12 @@ impl MgmKey {
     #[cfg(feature = "untested")]
     pub fn get_derived(yubikey: &mut YubiKey, pin: &[u8]) -> Result<Self> {
         let txn = yubikey.begin_transaction()?;
+
+        // Check the key algorithm.
+        let alg = MgmAlgorithmId::query(&txn)?;
+        if alg != MgmAlgorithmId::ThreeDes {
+            return Err(Error::NotSupported);
+        }
 
         // recover management key
         let admin_data = AdminData::read(&txn)?;
@@ -154,6 +207,12 @@ impl MgmKey {
     #[cfg(feature = "untested")]
     pub fn get_protected(yubikey: &mut YubiKey) -> Result<Self> {
         let txn = yubikey.begin_transaction()?;
+
+        // Check the key algorithm.
+        let alg = MgmAlgorithmId::query(&txn)?;
+        if alg != MgmAlgorithmId::ThreeDes {
+            return Err(Error::NotSupported);
+        }
 
         let protected_data = ProtectedData::read(&txn)
             .inspect_err(|e| error!("could not read protected data (err: {:?})", e))?;
@@ -353,67 +412,4 @@ impl<'a> TryFrom<&'a [u8]> for MgmKey {
     fn try_from(key_bytes: &'a [u8]) -> Result<Self> {
         Self::new(key_bytes.try_into().map_err(|_| Error::SizeError)?)
     }
-}
-
-/// Weak and semi weak DES keys as taken from:
-/// %A D.W. Davies
-/// %A W.L. Price
-/// %T Security for Computer Networks
-/// %I John Wiley & Sons
-/// %D 1984
-const WEAK_DES_KEYS: &[[u8; DES_LEN_DES]] = &[
-    // weak keys
-    [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
-    [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE],
-    [0x1F, 0x1F, 0x1F, 0x1F, 0x0E, 0x0E, 0x0E, 0x0E],
-    [0xE0, 0xE0, 0xE0, 0xE0, 0xF1, 0xF1, 0xF1, 0xF1],
-    // semi-weak keys
-    [0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE],
-    [0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01, 0xFE, 0x01],
-    [0x1F, 0xE0, 0x1F, 0xE0, 0x0E, 0xF1, 0x0E, 0xF1],
-    [0xE0, 0x1F, 0xE0, 0x1F, 0xF1, 0x0E, 0xF1, 0x0E],
-    [0x01, 0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1],
-    [0xE0, 0x01, 0xE0, 0x01, 0xF1, 0x01, 0xF1, 0x01],
-    [0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E, 0xFE],
-    [0xFE, 0x1F, 0xFE, 0x1F, 0xFE, 0x0E, 0xFE, 0x0E],
-    [0x01, 0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E],
-    [0x1F, 0x01, 0x1F, 0x01, 0x0E, 0x01, 0x0E, 0x01],
-    [0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1, 0xFE],
-    [0xFE, 0xE0, 0xFE, 0xE0, 0xFE, 0xF1, 0xFE, 0xF1],
-];
-
-/// Is this 3DES key weak?
-///
-/// This check is performed automatically when the key is instantiated to
-/// ensure no such keys are used.
-fn is_weak_key(key: &[u8; DES_LEN_3DES]) -> bool {
-    // set odd parity of key
-    let mut tmp = Zeroizing::new([0u8; DES_LEN_3DES]);
-
-    for i in 0..DES_LEN_3DES {
-        // count number of set bits in byte, excluding the low-order bit - SWAR method
-        let mut c = key[i] & 0xFE;
-
-        c = (c & 0x55) + ((c >> 1) & 0x55);
-        c = (c & 0x33) + ((c >> 2) & 0x33);
-        c = (c & 0x0F) + ((c >> 4) & 0x0F);
-
-        // if count is even, set low key bit to 1, otherwise 0
-        tmp[i] = (key[i] & 0xFE) | u8::from(c & 0x01 != 0x01);
-    }
-
-    // check odd parity key against table by DES key block
-    let mut is_weak = false;
-
-    for weak_key in WEAK_DES_KEYS.iter() {
-        if weak_key == &tmp[0..DES_LEN_DES]
-            || weak_key == &tmp[DES_LEN_DES..2 * DES_LEN_DES]
-            || weak_key == &tmp[2 * DES_LEN_DES..3 * DES_LEN_DES]
-        {
-            is_weak = true;
-            break;
-        }
-    }
-
-    is_weak
 }

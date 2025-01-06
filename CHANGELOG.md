@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `yubikey::certificate::SelfSigned`
 - `yubikey::Error::CertificateBuilder`
+- `yubikey::MgmAlgorithmId`
 
 ### Changed
 - MSRV is now 1.81.
@@ -19,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `rsa 0.10.0-pre.3`
   - `sha2 0.11.0-pre.4`
   - `x509-cert 0.3.0-pre.0`
+- `yubikey::piv`:
+  - `ManagementAlgorithmId` has been renamed to `SlotAlgorithmId`, and its
+    `ThreeDes` variant has been replaced by `SlotAlgorithmId::Management`
+    containing a `yubikey::MgmAlgorithmId`.
 
 ## 0.8.0 (2023-08-15)
 ### Added

@@ -168,6 +168,25 @@ impl<'tx> Transaction<'tx> {
         }
     }
 
+    /// Read metadata
+    pub(crate) fn get_metadata(&self, slot: SlotId) -> Result<piv::SlotMetadata> {
+        let response = Apdu::new(Ins::GetMetadata)
+            .p2(slot.into())
+            .transmit(self, CB_OBJ_MAX)?;
+
+        if !response.is_success() {
+            if response.status_words() == StatusWords::NotSupportedError {
+                return Err(Error::NotSupported); // Requires firmware 5.2.3
+            } else {
+                return Err(Error::GenericError);
+            }
+        }
+
+        let buf = Buffer::new(response.data().into());
+
+        piv::SlotMetadata::try_from(buf)
+    }
+
     /// Verify device PIN.
     pub fn verify_pin(&self, pin: &[u8]) -> Result<()> {
         if pin.len() > CB_PIN_MAX {
