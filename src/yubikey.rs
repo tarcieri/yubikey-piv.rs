@@ -36,7 +36,7 @@ use crate::{
     chuid::ChuId,
     config::Config,
     error::{Error, Result},
-    mgm::MgmKey,
+    mgm::MgmKeyOps,
     piv,
     reader::{Context, Reader},
     transaction::Transaction,
@@ -67,6 +67,7 @@ use {
 pub(crate) const ADMIN_FLAGS_1_PUK_BLOCKED: u8 = 0x01;
 
 /// 3DES authentication
+#[cfg(feature = "untested")]
 pub(crate) const ALGO_3DES: u8 = 0x03;
 
 /// Card management key
@@ -360,37 +361,44 @@ impl YubiKey {
     }
 
     /// Authenticate to the card using the provided management key (MGM).
-    pub fn authenticate(&mut self, mgm_key: MgmKey) -> Result<()> {
+    pub fn authenticate<K: MgmKeyOps>(&mut self, mgm_key: &K) -> Result<()> {
         let txn = self.begin_transaction()?;
 
         // get a challenge from the card
-        let challenge = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
+        let card_response = Apdu::new(Ins::Authenticate)
+            .params(mgm_key.algorithm_id().into(), KEY_CARDMGM)
             .data([TAG_DYN_AUTH, 0x02, 0x80, 0x00])
             .transmit(&txn, 261)?;
 
-        if !challenge.is_success() || challenge.data().len() < 12 {
+        if !card_response.is_success() || card_response.data().len() < 5 {
             return Err(Error::AuthenticationError);
         }
 
         // send a response to the cards challenge and a challenge of our own.
-        let response = mgm_key.decrypt(challenge.data()[4..12].try_into()?);
+        let card_challenge = mgm_key.card_challenge(&card_response.data()[4..])?;
+        let challenge_len = card_challenge.len();
 
-        let mut data = [0u8; 22];
-        data[0] = TAG_DYN_AUTH;
-        data[1] = 20; // 2 + 8 + 2 +8
-        data[2] = 0x80;
-        data[3] = 8;
-        data[4..12].copy_from_slice(&response);
-        data[12] = 0x81;
-        data[13] = 8;
-        OsRng.fill_bytes(&mut data[14..22]);
+        // If this exceeds a `u8` then the card is giving us unexpected data.
+        let auth_len = (2 + challenge_len + 2 + challenge_len)
+            .try_into()
+            .map_err(|_| Error::AuthenticationError)?;
 
-        let mut challenge = [0u8; 8];
-        challenge.copy_from_slice(&data[14..22]);
+        let mut data = Vec::with_capacity(4 + challenge_len + 2 + challenge_len);
+        data.push(TAG_DYN_AUTH);
+        data.push(auth_len);
+        data.push(0x80);
+        data.push(challenge_len as u8);
+        data.extend_from_slice(&card_challenge);
+        data.push(0x81);
+        data.push(challenge_len as u8);
+
+        let mut host_challenge = vec![0u8; challenge_len];
+        OsRng.fill_bytes(&mut host_challenge);
+
+        data.extend_from_slice(&host_challenge);
 
         let authentication = Apdu::new(Ins::Authenticate)
-            .params(ALGO_3DES, KEY_CARDMGM)
+            .params(mgm_key.algorithm_id().into(), KEY_CARDMGM)
             .data(data)
             .transmit(&txn, 261)?;
 
@@ -399,14 +407,7 @@ impl YubiKey {
         }
 
         // compare the response from the card with our challenge
-        let response = mgm_key.encrypt(&challenge);
-
-        use subtle::ConstantTimeEq;
-        if response.ct_eq(&authentication.data()[4..12]).unwrap_u8() != 1 {
-            return Err(Error::AuthenticationError);
-        }
-
-        Ok(())
+        mgm_key.check_challenge(&host_challenge, &authentication.data()[4..])
     }
 
     /// Get the PIV keys contained in this YubiKey.

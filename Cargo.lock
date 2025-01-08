@@ -1094,6 +1094,7 @@ name = "yubikey"
 version = "0.8.0"
 dependencies = [
  "base16ct",
+ "cipher",
  "der",
  "des",
  "ecdsa",
