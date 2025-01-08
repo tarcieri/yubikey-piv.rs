@@ -24,6 +24,8 @@ sha2 = "=0.11.0-pre.4"
 x509-cert = { version = "=0.3.0-pre.0", features = [ "builder", "hazmat" ] }
 
 [dependencies]
+aes = { version = "=0.9.0-pre.2", features = ["zeroize"] }
+cipher = { version = "=0.5.0-pre.7", features = ["rand_core"] }
 der = "=0.8.0-rc.1"
 des = "=0.9.0-pre.2"
 elliptic-curve = "=0.14.0-rc.1"

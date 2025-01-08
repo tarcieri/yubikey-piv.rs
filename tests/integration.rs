@@ -114,32 +114,39 @@ fn test_verify_pin() {
 #[test]
 #[ignore]
 fn test_set_mgmkey() {
+    use yubikey::MgmKeyOps;
+
+    let mut rng = OsRng;
     let mut yubikey = YUBIKEY.lock().unwrap();
+    let default_key = MgmKey::get_default(&yubikey).unwrap();
 
     assert!(yubikey.verify_pin(b"123456").is_ok());
     assert!(MgmKey::get_protected(&mut yubikey).is_err());
-    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+    assert!(yubikey.authenticate(&default_key).is_ok());
 
     // Set a protected management key.
-    assert!(MgmKey::generate().set_protected(&mut yubikey).is_ok());
+    assert!(MgmKey::generate_for(&yubikey, &mut rng)
+        .unwrap()
+        .set_protected(&mut yubikey)
+        .is_ok());
     let protected = MgmKey::get_protected(&mut yubikey).unwrap();
-    assert!(yubikey.authenticate(MgmKey::default()).is_err());
-    assert!(yubikey.authenticate(protected.clone()).is_ok());
+    assert!(yubikey.authenticate(&default_key).is_err());
+    assert!(yubikey.authenticate(&protected).is_ok());
 
     // Set a manual management key.
-    let manual = MgmKey::generate();
+    let manual = MgmKey::generate_for(&yubikey, &mut rng).unwrap();
     assert!(manual.set_manual(&mut yubikey, false).is_ok());
     assert!(MgmKey::get_protected(&mut yubikey).is_err());
-    assert!(yubikey.authenticate(MgmKey::default()).is_err());
-    assert!(yubikey.authenticate(protected.clone()).is_err());
-    assert!(yubikey.authenticate(manual.clone()).is_ok());
+    assert!(yubikey.authenticate(&default_key).is_err());
+    assert!(yubikey.authenticate(&protected).is_err());
+    assert!(yubikey.authenticate(&manual).is_ok());
 
     // Set back to the default management key.
     assert!(MgmKey::set_default(&mut yubikey).is_ok());
     assert!(MgmKey::get_protected(&mut yubikey).is_err());
-    assert!(yubikey.authenticate(protected).is_err());
-    assert!(yubikey.authenticate(manual).is_err());
-    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+    assert!(yubikey.authenticate(&protected).is_err());
+    assert!(yubikey.authenticate(&manual).is_err());
+    assert!(yubikey.authenticate(&default_key).is_ok());
 }
 
 //
@@ -148,9 +155,10 @@ fn test_set_mgmkey() {
 
 fn generate_self_signed_cert<KT: yubikey_signer::KeyType>() -> Certificate {
     let mut yubikey = YUBIKEY.lock().unwrap();
+    let default_key = MgmKey::get_default(&yubikey).unwrap();
 
     assert!(yubikey.verify_pin(b"123456").is_ok());
-    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+    assert!(yubikey.authenticate(&default_key).is_ok());
 
     let slot = SlotId::Retired(RetiredSlotId::R1);
 
@@ -285,9 +293,10 @@ fn test_slot_id_display() {
 #[ignore]
 fn test_read_metadata() {
     let mut yubikey = YUBIKEY.lock().unwrap();
+    let default_key = MgmKey::get_default(&yubikey).unwrap();
 
     assert!(yubikey.verify_pin(b"123456").is_ok());
-    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+    assert!(yubikey.authenticate(&default_key).is_ok());
 
     let slot = SlotId::Retired(RetiredSlotId::R1);
 
