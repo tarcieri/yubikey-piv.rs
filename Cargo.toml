@@ -29,7 +29,7 @@ des = "=0.9.0-pre.2"
 elliptic-curve = "=0.14.0-rc.1"
 hex = { package = "base16ct", version = "0.2", features = ["alloc"] }
 log = "0.4"
-nom = "7"
+nom = "8"
 num-bigint-dig = { version = "0.8", features = ["rand"] }
 num-traits = "0.2"
 num-integer = "0.1"
