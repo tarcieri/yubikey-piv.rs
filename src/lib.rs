@@ -51,7 +51,7 @@ mod config;
 mod consts;
 mod error;
 mod metadata;
-mod mgm;
+pub mod mgm;
 #[cfg(feature = "untested")]
 mod mscmap;
 #[cfg(feature = "untested")]

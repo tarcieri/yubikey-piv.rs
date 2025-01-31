@@ -15,7 +15,7 @@ use log::{error, trace};
 use zeroize::Zeroizing;
 
 #[cfg(feature = "untested")]
-use crate::mgm::{MgmKey, DES_LEN_3DES};
+use crate::mgm::{DeviceConfig, DeviceInfo, Lock, MgmKey, DES_LEN_3DES};
 
 const CB_PIN_MAX: usize = 8;
 
@@ -60,23 +60,32 @@ impl<'tx> Transaction<'tx> {
         Ok(recv_buffer)
     }
 
+    /// Select PIV application.
+    pub fn select_piv_application(&self) -> Result<()> {
+        self.select_application(
+            piv::APPLET_ID,
+            piv::APPLET_NAME,
+            "failed selecting application",
+        )
+    }
+
     /// Select application.
-    pub fn select_application(&self) -> Result<()> {
+    pub fn select_application(
+        &self,
+        applet: &[u8],
+        applet_name: &'static str,
+        error: &'static str,
+    ) -> Result<()> {
         let response = Apdu::new(Ins::SelectApplication)
             .p1(0x04)
-            .data(piv::APPLET_ID)
+            .data(applet)
             .transmit(self, 0xFF)
             .inspect_err(|e| error!("failed communicating with card: '{}'", e))?;
 
         if !response.is_success() {
-            error!(
-                "failed selecting application: {:04x}",
-                response.status_words().code()
-            );
+            error!("{}: {:04x}", error, response.status_words().code());
             return Err(match response.status_words() {
-                StatusWords::NotFoundError => Error::AppletNotFound {
-                    applet_name: piv::APPLET_NAME,
-                },
+                StatusWords::NotFoundError => Error::AppletNotFound { applet_name },
                 _ => Error::GenericError,
             });
         }
@@ -101,21 +110,11 @@ impl<'tx> Transaction<'tx> {
         match version.major {
             // YK4 requires switching to the YK applet to retrieve the serial
             4 => {
-                let sw = Apdu::new(Ins::SelectApplication)
-                    .p1(0x04)
-                    .data(otp::APPLET_ID)
-                    .transmit(self, 0xFF)?
-                    .status_words();
-
-                if !sw.is_success() {
-                    error!("failed selecting yk application: {:04x}", sw.code());
-                    return Err(match sw {
-                        StatusWords::NotFoundError => Error::AppletNotFound {
-                            applet_name: otp::APPLET_NAME,
-                        },
-                        _ => Error::GenericError,
-                    });
-                }
+                self.select_application(
+                    otp::APPLET_ID,
+                    otp::APPLET_NAME,
+                    "failed selecting yk application",
+                )?;
 
                 let response = Apdu::new(0x01).p1(0x10).transmit(self, 0xFF)?;
 
@@ -129,21 +128,11 @@ impl<'tx> Transaction<'tx> {
                 }
 
                 // reselect the PIV applet
-                let sw = Apdu::new(Ins::SelectApplication)
-                    .p1(0x04)
-                    .data(piv::APPLET_ID)
-                    .transmit(self, 0xFF)?
-                    .status_words();
-
-                if !sw.is_success() {
-                    error!("failed selecting application: {:04x}", sw.code());
-                    return Err(match sw {
-                        StatusWords::NotFoundError => Error::AppletNotFound {
-                            applet_name: piv::APPLET_NAME,
-                        },
-                        _ => Error::GenericError,
-                    });
-                }
+                self.select_application(
+                    piv::APPLET_ID,
+                    piv::APPLET_NAME,
+                    "failed selecting application",
+                )?;
 
                 response.data().try_into()
             }
@@ -504,5 +493,67 @@ impl<'tx> Transaction<'tx> {
             StatusWords::SecurityStatusError => Err(Error::AuthenticationError),
             _ => Err(Error::GenericError),
         }
+    }
+
+    /// Write configuration to the YubiKey
+    #[cfg(feature = "untested")]
+    pub fn write_config(
+        &mut self,
+        version: Version,
+        config: DeviceConfig,
+        current_lock: Option<Lock>,
+        new_lock: Option<Lock>,
+    ) -> Result<()> {
+        if version
+            < (Version {
+                major: 5,
+                minor: 0,
+                patch: 0,
+            })
+        {
+            return Err(Error::NotSupported);
+        }
+
+        let data = config.as_tlv(true, current_lock, new_lock)?;
+
+        let response = Apdu::new(Ins::WriteConfig)
+            .params(0x00, 0x00)
+            .data(&data)
+            .transmit(self, 2)?;
+
+        if !response.is_success() {
+            error!(
+                "Unable to write_config: {:04x}",
+                response.status_words().code()
+            );
+            return Err(Error::GenericError);
+        }
+
+        Ok(())
+    }
+
+    /// Write configuration to the YubiKey
+    #[cfg(feature = "untested")]
+    pub fn read_config(&mut self) -> Result<DeviceInfo> {
+        let mut data = [0u8; CB_BUF_MAX];
+        let mut len = data.len();
+        let data_remaining = &mut data[..];
+
+        len -= data_remaining.len();
+        let response = Apdu::new(Ins::ReadConfig)
+            .params(0x00, 0x00)
+            .data(&data[..len])
+            .transmit(self, CB_BUF_MAX + 2)?;
+
+        if !response.is_success() {
+            error!(
+                "Unable to read configuration: {:04x}",
+                response.status_words().code()
+            );
+            return Err(Error::GenericError);
+        }
+
+        let data = response.data();
+        DeviceInfo::parse(data)
     }
 }
