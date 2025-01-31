@@ -50,6 +50,7 @@ mod chuid;
 mod config;
 mod consts;
 mod error;
+pub mod hsmauth;
 mod metadata;
 mod mgm;
 #[cfg(feature = "untested")]
