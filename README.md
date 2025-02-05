@@ -22,7 +22,7 @@ access provided by the [`pcsc` crate].
 ## About
 
 YubiKeys are versatile devices and through their PIV support, you can use them
-to store a number of RSA (2048/1024) and ECC (NIST P-256/P-384) private keys
+to store a number of RSA (1024/2048/3072/4096) and ECC (NIST P-256/P-384) private keys
 with configurable access control policies. Both the signing (RSASSA/ECDSA) and
 encryption (PKCS#1v1.5/ECIES) use cases are supported for either key type.
 
@@ -56,13 +56,16 @@ on which devices support PIV and the available functionality.
 ### Supported Algorithms
 - **Authentication**: `3DES`
 - **Encryption**:
-  - RSA: `RSA1024`, `RSA2048`
+  - RSA: `RSA1024`, `RSA2048`, `RSA3072`, `RSA4096`
   - ECC: `ECCP256`, `ECCP384` (NIST curves: P-256, P-384)
 - **Signatures**:
-  - RSASSA-PKCS#1v1.5: `RSA1024`, `RSA2048`
+  - RSASSA-PKCS#1v1.5: `RSA1024`, `RSA2048`, `RSA3072`, `RSA4096`
   - ECDSA: `ECCP256`, `ECCP384` (NIST curves: P-256, P-384)
 
-NOTE: RSASSA-PSS signatures and RSA-OAEP encryption may be supportable (TBD)
+NOTE:
+
+- RSASSA-PSS signatures and RSA-OAEP encryption may be supportable (TBD)
+- `RSA3072` and `RSA4096` require a YubiKey with firmware 5.7 or newer.
 
 ## Minimum Supported Rust Version
 

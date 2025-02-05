@@ -211,6 +211,34 @@ fn generate_self_signed_rsa_cert() {
 
 #[test]
 #[ignore]
+fn generate_rsa3072() {
+    let mut yubikey = YUBIKEY.lock().unwrap();
+    let version = yubikey.version();
+
+    assert!(yubikey.authenticate(MgmKey::default()).is_ok());
+
+    let slot = SlotId::Retired(RetiredSlotId::R1);
+
+    // Generate a new key in the selected slot.
+    let generated = piv::generate(
+        &mut yubikey,
+        slot,
+        AlgorithmId::Rsa3072,
+        PinPolicy::Default,
+        TouchPolicy::Default,
+    );
+
+    match generated {
+        Ok(key) => {
+            let pubkey = key.subject_public_key;
+            assert!(pubkey.bit_len() > 3072)
+        }
+        Err(e) => assert!((version.major, version.minor) < (5, 7) && e == Error::AlgorithmError),
+    }
+}
+
+#[test]
+#[ignore]
 fn generate_self_signed_ec_cert() {
     let cert = generate_self_signed_cert::<p256::NistP256>();
 

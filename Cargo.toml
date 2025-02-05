@@ -4,7 +4,7 @@ version = "0.8.0"
 description = """
 Pure Rust cross-platform host-side driver for YubiKey devices from Yubico with
 support for hardware-backed public-key decryption and digital signatures using
-the Personal Identity Verification (PIV) application. Supports RSA (1024/2048)
+the Personal Identity Verification (PIV) application. Supports RSA (1024/2048/3072/4096)
 or ECC (NIST P-256/P-384) algorithms e.g, PKCS#1v1.5, ECDSA
 """
 authors = ["Tony Arcieri <tony@iqlusion.io>", "Yubico AB"]

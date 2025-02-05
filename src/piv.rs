@@ -6,10 +6,10 @@
 //! Supported algorithms:
 //!
 //! - **Encryption**:
-//!   - RSA: `RSA1024`, `RSA2048`
+//!   - RSA: `RSA1024`, `RSA2048`, `RSA3072`, `RSA4096`
 //!   - ECC: `ECCP256`, `ECCP384` (NIST curves: P-256, P-384)
 //! - **Signatures**:
-//!   - RSASSA-PKCS#1v1.5: `RSA1024`, `RSA2048`
+//!   - RSASSA-PKCS#1v1.5: `RSA1024`, `RSA2048`, `RSA3072`, `RSA4096`
 //!   - ECDSA: `ECCP256`, `ECCP384` (NIST curves: P-256, P-384)
 
 // Adapted from yubico-piv-tool:
@@ -482,6 +482,12 @@ pub enum AlgorithmId {
     /// 2048-bit RSA.
     Rsa2048,
 
+    /// 3072-bit RSA. Requires firmware 5.7 or newer
+    Rsa3072,
+
+    /// 4096-bit RSA. Requires firmware 5.7 or newer
+    Rsa4096,
+
     /// ECDSA with the NIST P256 curve.
     EccP256,
 
@@ -496,6 +502,8 @@ impl TryFrom<u8> for AlgorithmId {
         match value {
             0x06 => Ok(AlgorithmId::Rsa1024),
             0x07 => Ok(AlgorithmId::Rsa2048),
+            0x05 => Ok(AlgorithmId::Rsa3072),
+            0x16 => Ok(AlgorithmId::Rsa4096),
             0x11 => Ok(AlgorithmId::EccP256),
             0x14 => Ok(AlgorithmId::EccP384),
             _ => Err(Error::AlgorithmError),
@@ -508,6 +516,8 @@ impl From<AlgorithmId> for u8 {
         match id {
             AlgorithmId::Rsa1024 => 0x06,
             AlgorithmId::Rsa2048 => 0x07,
+            AlgorithmId::Rsa3072 => 0x05,
+            AlgorithmId::Rsa4096 => 0x16,
             AlgorithmId::EccP256 => 0x11,
             AlgorithmId::EccP384 => 0x14,
         }
@@ -525,6 +535,8 @@ impl AlgorithmId {
         match self {
             AlgorithmId::Rsa1024 => 64,
             AlgorithmId::Rsa2048 => 128,
+            AlgorithmId::Rsa3072 => 192,
+            AlgorithmId::Rsa4096 => 256,
             AlgorithmId::EccP256 => 32,
             AlgorithmId::EccP384 => 48,
         }
@@ -533,7 +545,10 @@ impl AlgorithmId {
     #[cfg(feature = "untested")]
     fn get_param_tag(self) -> u8 {
         match self {
-            AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => 0x01,
+            AlgorithmId::Rsa1024
+            | AlgorithmId::Rsa2048
+            | AlgorithmId::Rsa3072
+            | AlgorithmId::Rsa4096 => 0x01,
             AlgorithmId::EccP256 | AlgorithmId::EccP384 => 0x6,
         }
     }
@@ -606,7 +621,10 @@ pub fn generate(
     let setting_roca: setting::Setting;
 
     match algorithm {
-        AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => {
+        AlgorithmId::Rsa1024
+        | AlgorithmId::Rsa2048
+        | AlgorithmId::Rsa3072
+        | AlgorithmId::Rsa4096 => {
             if yubikey.version.major == 4
                 && (yubikey.version.minor < 3
                     || yubikey.version.minor == 3 && (yubikey.version.patch < 5))
@@ -810,7 +828,7 @@ impl RsaKeyData {
 
 /// Imports a private RSA encryption or signing key into the YubiKey.
 ///
-/// Errors if `algorithm` isn't `AlgorithmId::Rsa1024` or `AlgorithmId::Rsa2048`.
+/// Errors if `algorithm` isn't `AlgorithmId::Rsa1024` or `AlgorithmId::Rsa2048` or `AlgorithmId::Rsa3072` or `AlgorithmId::Rsa4096`.
 #[cfg(feature = "untested")]
 pub fn import_rsa_key(
     yubikey: &mut YubiKey,
@@ -821,7 +839,10 @@ pub fn import_rsa_key(
     pin_policy: PinPolicy,
 ) -> Result<()> {
     match algorithm {
-        AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => (),
+        AlgorithmId::Rsa1024
+        | AlgorithmId::Rsa2048
+        | AlgorithmId::Rsa3072
+        | AlgorithmId::Rsa4096 => (),
         _ => return Err(Error::AlgorithmError),
     }
 
@@ -1111,7 +1132,10 @@ fn read_public_key(
     //
     //    0x7f 0x49 -> Application | Constructed | 0x49
     match algorithm {
-        AlgorithmId::Rsa1024 | AlgorithmId::Rsa2048 => {
+        AlgorithmId::Rsa1024
+        | AlgorithmId::Rsa2048
+        | AlgorithmId::Rsa3072
+        | AlgorithmId::Rsa4096 => {
             // It appears that the inner application-specific value returned by the
             // YubiKey is constructed such that RSA pubkeys can be parsed in two ways:
             //

@@ -369,6 +369,22 @@ pub mod yubikey_signer {
         const ALGORITHM: AlgorithmId = AlgorithmId::Rsa2048;
     }
 
+    /// RSA 3072 bits key
+    pub struct Rsa3072;
+
+    impl RsaLength for Rsa3072 {
+        const BIT_LENGTH: usize = 3072;
+        const ALGORITHM: AlgorithmId = AlgorithmId::Rsa3072;
+    }
+
+    /// RSA 4096 bits key
+    pub struct Rsa4096;
+
+    impl RsaLength for Rsa4096 {
+        const BIT_LENGTH: usize = 4096;
+        const ALGORITHM: AlgorithmId = AlgorithmId::Rsa4096;
+    }
+
     /// RSA keys used to sign certificates
     pub struct YubiRsa<N: RsaLength> {
         _len: PhantomData<N>,
